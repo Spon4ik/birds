@@ -312,16 +312,40 @@ def get_image(image_df,idx,df_index=True):
   else:
       return(plt.imread(image_df.iloc[idx].Filepath))
 
-# 'create_lables_dic' creates lables dictionary from the train_images_obj (used by apply_model) 
+# 'create_labels_dic' creates lables dictionary from the train_images_obj (used by apply_model) 
 # inputs: 
 #   train_images_obj - the output of an ImageDataGenerator.flow_from_dataframe loaded with the train_df
 # outpus:
 #    labels_dic - dictioary with the labels
-def create_lables_dic(train_images_obj):
-    # Map the label
-    labels = (train_images_obj.class_indices)
-    labels_dic = dict((v,k) for k,v in labels.items())
+
+# def create_labels_dic(train_images_obj):
+#     # Map the label
+#     labels = (train_images_obj['label'].class_indices)
+#     labels_dic = dict((v,k) for k,v in labels.items())
+#     return labels_dic
+
+# def create_labels_dic(train_df):
+#     # Get unique labels from the specified column and sort them to ensure consistent ordering
+#     unique_labels = sorted(train_df['label'].unique())
+#     labels_dic = {label: idx for idx, label in enumerate(unique_labels)}
+#     return labels_dic
+
+def create_labels_dic(train_df):
+    # Get unique labels from the specified column and sort them to ensure consistent ordering
+    unique_labels = sorted(train_df['label'].unique())
+    # labels_dic = {label: idx for idx, label in enumerate(unique_labels)}
+    # labels_dic = dict((v) for v in unique_labels)
+    labels_dic = {}
+    for idx, label in enumerate(unique_labels):
+        labels_dic[idx] = label
     return labels_dic
+
+# def create_labels_dic(train_images_obj):
+#     # Map the label
+#     labels = (train_images_obj['label'].class_indices)
+#     labels_dic = dict((v,k) for k,v in labels.items())
+#     return labels_dic
+
     
 
 def get_classification_report(y_test, y_pred):
@@ -474,7 +498,7 @@ def get_obj_dic_stack(model,models_path,train_obj_dic,val_obj_dic,test_obj_dic,p
 
 
     else:
-        labels_dic = create_lables_dic(train_obj_dic['images_obj'])
+        labels_dic = create_labels_dic(train_obj_dic['df'])
         test_obj_dic = apply_model(model,labels_dic,test_obj_dic,plot_report=plot_report)
         train_obj_dic = apply_model(model,labels_dic,train_obj_dic,plot_report=plot_report)
         val_obj_dic = apply_model(model,labels_dic,val_obj_dic,plot_report=plot_report)
@@ -708,7 +732,7 @@ def train_model (model,models_path,train_obj_dic,val_obj_dic,params, BATCH_SIZE,
     RUN_NAME = os.path.basename(os.path.normpath(run_path))
 
     # Create checkpoint callback
-    checkpoint_path = f'{run_path}/check_point.h5'
+    checkpoint_path = f'{run_path}check_point.h5'
     print(checkpoint_path)
     checkpoint_callback = ModelCheckpoint(checkpoint_path,
                                         save_weights_only=False,
@@ -718,25 +742,38 @@ def train_model (model,models_path,train_obj_dic,val_obj_dic,params, BATCH_SIZE,
     # Setup EarlyStopping callback to stop training if model's val_loss doesn't improve for 3 epochs
     early_stopping = EarlyStopping(monitor = "val_loss", # watch the val loss metric
                                 patience = params['N_epochs_patitence'],
+                                min_delta=0.001,
                                 restore_best_weights = True) # if val loss decreases for 3 epochs in a row, stop training
 
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6)
 
 
-    model_file_path = f'{run_path}/check_point.h5'
-    history_file_path = f'{run_path}/history.pkl'
+    model_file_path = f'{run_path}check_point.h5'
+    history_file_path = f'{run_path}history.pkl'
         # Function to calculate dataset size
         
     def get_dataset_size(dataset):
         return sum(1 for _ in dataset)
 
     # Calculate the actual number of samples in the datasets within the function
-    total_train_samples = get_dataset_size(train_obj_dic['images_obj'])
-    total_val_samples = get_dataset_size(val_obj_dic['images_obj'])
+    # total_train_samples = get_dataset_size(train_obj_dic['images_obj'])
+    # total_val_samples = get_dataset_size(val_obj_dic['images_obj'])
+    total_train_samples = len(train_obj_dic['df'])
+    total_val_samples = len(val_obj_dic['df'])
 
     # Assuming BATCH_SIZE is defined
     steps_per_epoch = total_train_samples // BATCH_SIZE
     validation_steps = total_val_samples // BATCH_SIZE
+    
+    # Ensure steps_per_epoch is at least 1
+    if steps_per_epoch == 0:
+        steps_per_epoch = 1
+    if validation_steps == 0:
+        validation_steps = 1
+    
+    # Calculate number of repeats
+    num_repeats = params['N_epochs'] * (total_train_samples // BATCH_SIZE)
+    train_obj_dic['images_obj'] = train_obj_dic['images_obj'].repeat(num_repeats)
 
     if os.path.exists(model_file_path):
     # load model    
@@ -782,16 +819,6 @@ def train_model (model,models_path,train_obj_dic,val_obj_dic,params, BATCH_SIZE,
         # Include it in the callbacks list
         # callbacks_list = [early_stopping, checkpoint_callback, reduce_lr, debug_shapes_callback]
         callbacks_list = [early_stopping, checkpoint_callback, reduce_lr]
-        # Ensure steps_per_epoch is at least 1
-        if steps_per_epoch <= 0:
-            steps_per_epoch = 1
-
-        # Calculate validation_steps
-        # Assuming val_obj_dic['images_obj'] is your validation dataset
-        total_val_samples = get_dataset_size(val_obj_dic['images_obj'])
-        validation_steps = total_val_samples // BATCH_SIZE
-        if validation_steps <= 0:
-            validation_steps = 1
 
         # Add debugging statements to verify the values
         print("Training with the following settings:")
@@ -824,9 +851,10 @@ def train_model (model,models_path,train_obj_dic,val_obj_dic,params, BATCH_SIZE,
 
 # Calculate the elapsed time
         elapsed_time = end_time - start_time        
-        birds.save_var(elapsed_time,f'{run_path}/elapsed_time.keras')
+        birds.save_var(elapsed_time,f'{run_path}elapsed_time.keras')
 
         model.save(model_file_path, save_format='tf')
+        # model.save(model_file_path)
         with open(history_file_path, 'wb') as file:
             pickle.dump(history.history, file)
 
